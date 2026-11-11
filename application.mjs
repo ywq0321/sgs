@@ -1,6 +1,6 @@
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
-import {randomInt} from 'node:crypto';
+import {randomInt,randomUUID} from 'node:crypto';
 import {generals} from './public/catalog.js';
 import {createRoom,join,snapshot,act,record,leave,admin} from './game.mjs';
 import {createAdminAuth} from './admin-auth.mjs';
@@ -14,7 +14,7 @@ async function readJson(req){
   let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>10000)throw Object.assign(Error('请求过大'),{status:413});}
   try{return JSON.parse(body||'{}');}catch{throw Error('请求内容无效');}
 }
-function cookieToken(req){for(const pair of String(req.headers.cookie||'').split(';')){const [name,...value]=pair.trim().split('=');if(name==='sgs_admin')return value.join('=');}return '';}
+function cookieToken(req,key='sgs_admin'){for(const pair of String(req.headers.cookie||'').split(';')){const [name,...value]=pair.trim().split('=');if(name===key)return value.join('=');}return '';}
 function sameOrigin(req){
   if(req.headers['sec-fetch-site']==='cross-site')return false;
   if(!req.headers.origin)return true;
@@ -67,10 +67,10 @@ export function createApplication({adminPassword=process.env.ADMIN_PASSWORD||'',
         const room=rooms.get(key),token=url.searchParams.get('token');
         if(!room?.players.some(p=>p.token===token)){json(res,404,{error:'房间已结束，请重新加入'});return;}
         res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Netlify-CDN-Cache-Control':'no-store','Connection':'keep-alive','X-Accel-Buffering':'no'});
-        res.flushHeaders();room.clients.get(token)?.end();room.clients.set(token,res);
-        res.write(`data: ${JSON.stringify(snapshot(room,token))}\n\n`);
+        res.flushHeaders();const previous=room.clients.get(token);if(previous){previous.write('event: session-replaced\ndata: {}\n\n');previous.end();}room.clients.set(token,res);
+        broadcast(room);
         const timer=setInterval(()=>res.write(': ping\n\n'),20000);
-        res.on('close',()=>{clearInterval(timer);if(room.clients.get(token)===res)room.clients.delete(token);});return;
+        res.on('close',()=>{clearInterval(timer);if(room.clients.get(token)===res){room.clients.delete(token);broadcast(room);}});return;
       }
       if(url.pathname==='/api/room-session'&&req.method==='GET'){
         let room;try{room=rooms.get(normalizeRoomCode(url.searchParams.get('room')));}catch{}
@@ -81,6 +81,14 @@ export function createApplication({adminPassword=process.env.ADMIN_PASSWORD||'',
         if(req.method!=='POST'){json(res,405,{error:'不支持的操作'});return;}
         if(!sameOrigin(req)){json(res,403,{error:'不允许跨站请求'});return;}
         const data=await readJson(req),action=url.pathname.slice(5);let room,p;
+        const browserKey=cookieToken(req,'sgs_player');
+        if(action==='recover'){
+          const seats=[...rooms.values()].flatMap(r=>r.players.filter(p=>browserKey&&p.browserKey===browserKey).map(p=>({room:r.code,id:p.id,name:p.name,general:p.general})));
+          if(!data.room){json(res,200,{seats});return;}
+          room=rooms.get(normalizeRoomCode(data.room));p=room?.players.find(p=>browserKey&&p.browserKey===browserKey&&p.id===data.id);
+          if(!p){json(res,401,{error:'无法恢复这个座位，请使用原来的浏览器'});return;}
+          json(res,200,{token:p.token,state:snapshot(room,p.token)});return;
+        }
         if(['create','join'].includes(action)&&!generals.some(g=>g.name===data.general))throw Error('请先选择武将');
         if(action==='create'){
           let code;if(typeof data.room==='string'&&data.room.trim())code=normalizeRoomCode(data.room);
@@ -98,10 +106,16 @@ export function createApplication({adminPassword=process.env.ADMIN_PASSWORD||'',
             act(room,p,action,data);
           }
         }
-        broadcast(room);json(res,200,{token:p.token,state:snapshot(room,p.token)});return;
+        const headers={};
+        if(['create','join'].includes(action)){
+          p.browserKey=/^[0-9a-f-]{36}$/.test(browserKey)?browserKey:randomUUID();
+          const secure=req.socket.encrypted||req.headers['x-forwarded-proto']==='https'||process.env.NETLIFY==='true';
+          headers['Set-Cookie']=`sgs_player=${p.browserKey}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=2592000${secure?'; Secure':''}`;
+        }
+        broadcast(room);json(res,200,{token:p.token,state:snapshot(room,p.token)},headers);return;
       }
       if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return;}
-      const files={'/':'index.html','/app.js':'app.js','/display-mode.js':'display-mode.js','/style.css':'style.css','/catalog.js':'catalog.js','/admin':'admin.html','/admin/':'admin.html','/admin.html':'admin.html','/admin.js':'admin.js','/admin.css':'admin.css'};
+      const files={'/':'index.html','/app.js':'app.js','/display-mode.js':'display-mode.js','/style.css':'style.css','/table.css':'table.css','/catalog.js':'catalog.js','/admin':'admin.html','/admin/':'admin.html','/admin.html':'admin.html','/admin.js':'admin.js','/admin.css':'admin.css'};
       let file=files[url.pathname];if(/^\/art\/[a-z-]+\.svg$/.test(url.pathname))file=url.pathname.slice(1);
       if(!file){res.writeHead(404);res.end('Not found');return;}
       let buffer;try{buffer=await readFile(new URL(file,publicDirectory));}catch(error){if(error.code==='ENOENT'){res.writeHead(404);res.end('Not found');return;}throw error;}
