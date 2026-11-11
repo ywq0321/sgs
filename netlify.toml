@@ -1,0 +1,30 @@
+[build]
+  publish = "public"
+  command = "npm run check"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+# Netlify Server routes /api/*, /events and /admin automatically.
+# Do not add an SPA catch-all rewrite: it would hide those endpoints.
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    Netlify-CDN-Cache-Control = "no-store"
+
+[[headers]]
+  for = "/admin*"
+  [headers.values]
+    Cache-Control = "no-store"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    X-Frame-Options = "DENY"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+
+[[headers]]
+  for = "/events"
+  [headers.values]
+    Cache-Control = "no-cache, no-transform"
+    Netlify-CDN-Cache-Control = "no-store"

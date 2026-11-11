@@ -1,0 +1,15 @@
+{
+  "name": "sanguo-table",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs --tui",
+    "check": "node --check game.mjs && node --check server.mjs && node --check application.mjs && node --check host-tui.mjs && node --check admin-auth.mjs && node --check room-code.mjs && node --check netlify/server/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/catalog.js && node --check public/display-mode.js",
+    "test": "node --test test/*.test.mjs",
+    "start:cloud": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
