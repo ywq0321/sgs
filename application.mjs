@@ -26,7 +26,7 @@ function sessionCookie(req,value,maxAge=8*60*60){
 }
 export function createApplication({adminPassword=process.env.ADMIN_PASSWORD||'',clock,publicDirectory=new URL('./public/',import.meta.url)}={}){
   const rooms=new Map(),auth=createAdminAuth({password:adminPassword,...(clock?{now:clock}:{})});
-  function broadcast(room){for(const [token,res]of room.clients)res.write(`data: ${JSON.stringify(snapshot(room,token))}\n\n`);}
+  function broadcast(room){for(const [token,res]of room.clients)if(!res.destroyed&&!res.writableEnded)res.write(`data: ${JSON.stringify(snapshot(room,token))}\n\n`);}
   function closeRoom(room){record(room,'[admin] 管理员关闭了房间');for(const res of room.clients.values()){res.write('event: room-closed\ndata: {}\n\n');res.end();}room.clients.clear();rooms.delete(room.code);}
   const roomSummary=room=>({code:room.code,status:room.status,mode:room.mode,round:room.round,turn:room.turn,host:room.host,log:room.log.slice(0,30),players:room.players.map(p=>({id:p.id,name:p.name,general:p.general,hp:p.hp,maxHp:p.maxHp,alive:p.alive,count:p.hand.length,equipment:Object.values(p.equipment||{}).map(c=>c.name)}))});
   async function adminRequest(req,res,url){
@@ -115,13 +115,14 @@ export function createApplication({adminPassword=process.env.ADMIN_PASSWORD||'',
         broadcast(room);json(res,200,{token:p.token,state:snapshot(room,p.token)},headers);return;
       }
       if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return;}
-      const files={'/':'index.html','/app.js':'app.js','/display-mode.js':'display-mode.js','/style.css':'style.css','/table.css':'table.css','/catalog.js':'catalog.js','/admin':'admin.html','/admin/':'admin.html','/admin.html':'admin.html','/admin.js':'admin.js','/admin.css':'admin.css'};
+      const files={'/':'index.html','/app.js':'app.js','/display-mode.js':'display-mode.js','/style.css':'style.css','/table.css':'table.css','/mobile.css':'mobile.css','/response-rules.js':'response-rules.js','/social.js':'social.js','/catalog.js':'catalog.js','/admin':'admin.html','/admin/':'admin.html','/admin.html':'admin.html','/admin.js':'admin.js','/admin.css':'admin.css'};
       let file=files[url.pathname];if(/^\/art\/[a-z-]+\.svg$/.test(url.pathname))file=url.pathname.slice(1);
       if(!file){res.writeHead(404);res.end('Not found');return;}
       let buffer;try{buffer=await readFile(new URL(file,publicDirectory));}catch(error){if(error.code==='ENOENT'){res.writeHead(404);res.end('Not found');return;}throw error;}
       res.writeHead(200,{'Content-Type':file.endsWith('.svg')?'image/svg+xml':file.endsWith('.css')?'text/css; charset=utf-8':file.endsWith('.js')?'text/javascript; charset=utf-8':'text/html; charset=utf-8','Cache-Control':file.startsWith('admin')?'no-store':'no-cache'});res.end(req.method==='HEAD'?undefined:buffer);
     }catch(error){if(!res.headersSent)json(res,error.status||400,{error:error.message});else res.end();}
   });
-  async function stop(){for(const room of rooms.values())for(const client of room.clients.values())client.end();const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}
+  const counterTimer=setInterval(()=>{for(const room of rooms.values()){const q=room.pending;if(q?.type==='counter'&&q.deadline<=Date.now()){for(const id of [...q.responders]){if(room.pending?.id!==q.id)break;const p=room.players.find(x=>x.id===id);if(p)act(room,p,'respond',{pass:true,promptId:q.id});}broadcast(room);}}},500);counterTimer.unref();
+  async function stop(){clearInterval(counterTimer);for(const room of rooms.values())for(const client of room.clients.values())client.end();const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}
   return {server,rooms,broadcast,closeRoom,stop};
 }
